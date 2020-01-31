@@ -1,6 +1,8 @@
 ﻿using Corvus.Retry;
 using Corvus.Retry.Policies;
 using Corvus.Retry.Strategies;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using MoreLinq;
 using SpotifyAPI.Web;
 using SpotifyAPI.Web.Auth;
@@ -9,7 +11,6 @@ using SpotifyAPI.Web.Models;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -18,15 +19,27 @@ namespace WhatsAppToSpotify
 {
     public class Spotify
     {
-        private SpotifyWebAPI client;
+        private readonly Lazy<Task<SpotifyWebAPI>> lazyClient;
+        private readonly ILogger<Spotify> logger;
+        private readonly SpotifyOptions options;
 
-        public Spotify(SpotifyWebAPI client)
+        public Spotify(IOptions<SpotifyOptions> options, ILogger<Spotify> logger)
         {
-            this.client = client;
+            this.options = options.Value;
+            this.logger = logger;
+            this.lazyClient = new Lazy<Task<SpotifyWebAPI>>(async () =>
+                {
+                    Token token = await this.GetTokenAsync();
+
+                    var client = await this.InitializeClientAsync(token, options.Value.ClientId, options.Value.ClientSecret);
+                    return client;
+                }
+            );
         }
 
         public async Task<FullTrack> FindTrackAsync(Track track)
         {
+            var client = await this.lazyClient.Value;
             Regex regex = new Regex("[^a-zA-Z0-9 ]");
             var query = $"{track.Part1} {track.Part2}";
             query = regex.Replace(query, string.Empty);
@@ -34,16 +47,17 @@ namespace WhatsAppToSpotify
             var searchResult = await Retriable.RetryAsync(
                 async () =>
                 {
-                    var result = await this.client.SearchItemsAsync(query, SearchType.Track);
-                    if (result.HasError()) 
+                    var result = await client.SearchItemsAsync(query, SearchType.Track);
+                    if (result.HasError())
                     {
+                        this.logger.LogError($"Error: {result.Error.Status} - {result.Error.Message}");
+
                         if (result.Error.Status == 400)
                         {
                             return null;
                         }
 
-                        Console.WriteLine($"Error: {result.Error.Status} - {result.Error.Message}");
-                        throw new Exception(); 
+                        throw new Exception(result.Error.Message);
                     }
 
                     return result;
@@ -60,19 +74,20 @@ namespace WhatsAppToSpotify
 
         public async Task AddToPlaylistAsync(string playlistId, IList<FullTrack> tracks)
         {
+            var client = await this.lazyClient.Value;
             var batches = tracks.Select(t => t.Uri).Batch(100);
 
             foreach (var batch in batches)
             {
-                var result = await this.client.AddPlaylistTracksAsync(playlistId, batch.ToList());
+                var result = await client.AddPlaylistTracksAsync(playlistId, batch.ToList());
             }
         }
 
-        public static async Task<Token> GetUserTokenAsync(string clientId, string clientSecret)
+        public async Task<Token> GetUserTokenAsync()
         {
             AuthorizationCodeAuth auth = new AuthorizationCodeAuth(
-                clientId,
-                clientSecret,
+                this.options.ClientId,
+                this.options.ClientSecret,
                 "http://localhost:4002",
                 "http://localhost:4002",
                 Scope.PlaylistModifyPrivate | Scope.PlaylistModifyPublic
@@ -85,11 +100,6 @@ namespace WhatsAppToSpotify
             {
                 auth.Stop();
                 token = await auth.ExchangeCode(payload.Code);
-                SpotifyWebAPI api = new SpotifyWebAPI()
-                {
-                    TokenType = token.TokenType,
-                    AccessToken = token.AccessToken
-                };
                 tcs.SetResult(true);
             };
             auth.Start(); // Starts an internal HTTP Server
@@ -98,7 +108,27 @@ namespace WhatsAppToSpotify
             return token;
         }
 
-        public static async Task<Spotify> CreateAsync(Token token, string clientId, string clientSecret)
+        private async Task<Token> GetTokenAsync()
+        {
+            Token token;
+            if (this.options.AccessToken == null || this.options.RefreshToken == null)
+            {
+                token = await this.GetUserTokenAsync();
+            }
+            else
+            {
+                token = new Token
+                {
+                    AccessToken = this.options.AccessToken,
+                    RefreshToken = this.options.RefreshToken,
+                    TokenType = "Bearer"
+                };
+            }
+
+            return token;
+        }
+
+        private async Task<SpotifyWebAPI> InitializeClientAsync(Token token, string clientId, string clientSecret)
         {
             if (token.IsExpired())
             {
@@ -118,7 +148,7 @@ namespace WhatsAppToSpotify
                 TokenType = token.TokenType
             };
 
-            return new Spotify(client);
+            return client;
         }
     }
 }

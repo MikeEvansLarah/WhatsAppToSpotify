@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Text.RegularExpressions;
+using CsvHelper.Configuration.Attributes;
 
 namespace WhatsAppToSpotify
 {
@@ -13,6 +14,7 @@ namespace WhatsAppToSpotify
         public string Part2 { get; private set; }
         public string SpotifyLink { get; private set; }
 
+        [Format("o")]
         public DateTime SuggestedOn { get; set; }
 
         public string SuggestedBy { get; set; }

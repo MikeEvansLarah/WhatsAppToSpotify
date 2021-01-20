@@ -40,34 +40,65 @@ namespace WhatsAppToSpotify
         public async Task<FullTrack> FindTrackAsync(Track track)
         {
             var client = await this.lazyClient.Value;
-            Regex regex = new Regex("[^a-zA-Z0-9 ]");
-            var query = $"{track.Part1} {track.Part2}";
-            query = regex.Replace(query, string.Empty);
 
-            var searchResult = await Retriable.RetryAsync(
-                async () =>
-                {
-                    var result = await client.SearchItemsAsync(query, SearchType.Track);
-                    if (result.HasError())
+            FullTrack spotifyTrack;
+
+            if (track.SpotifyLink != null)
+            {
+                var id = new Uri(track.SpotifyLink).AbsolutePath.Split('/').Last();
+
+                spotifyTrack = await Retriable.RetryAsync(
+                    async () =>
                     {
-                        this.logger.LogError($"Error: {result.Error.Status} - {result.Error.Message}");
-
-                        if (result.Error.Status == 400)
+                        var result = await client.GetTrackAsync(id);
+                        if (result.HasError())
                         {
-                            return null;
+                            this.logger.LogError($"Error: {result.Error.Status} - {result.Error.Message}");
+
+                            if (result.Error.Status == 400)
+                            {
+                                return null;
+                            }
+
+                            throw new Exception(result.Error.Message);
                         }
 
-                        throw new Exception(result.Error.Message);
-                    }
+                        return result;
+                    },
+                    CancellationToken.None,
+                    new Backoff(10, TimeSpan.FromSeconds(5)),
+                    new AnyException());
+            }
+            else
+            {
+                Regex regex = new Regex("[^a-zA-Z0-9 ]");
+                var query = $"{track.Part1} {track.Part2}";
+                query = regex.Replace(query, string.Empty);
 
-                    return result;
-                },
-                CancellationToken.None,
-                new Backoff(10, TimeSpan.FromSeconds(5)),
-                new AnyException());
+                var searchResult = await Retriable.RetryAsync(
+                    async () =>
+                    {
+                        var result = await client.SearchItemsAsync(query, SearchType.Track);
+                        if (result.HasError())
+                        {
+                            this.logger.LogError($"Error: {result.Error.Status} - {result.Error.Message}");
 
+                            if (result.Error.Status == 400)
+                            {
+                                return null;
+                            }
 
-            var spotifyTrack = searchResult?.Tracks.Items.FirstOrDefault();
+                            throw new Exception(result.Error.Message);
+                        }
+
+                        return result;
+                    },
+                    CancellationToken.None,
+                    new Backoff(10, TimeSpan.FromSeconds(5)),
+                    new AnyException());
+
+                spotifyTrack = searchResult?.Tracks.Items.FirstOrDefault();
+            }
 
             return spotifyTrack;
         }

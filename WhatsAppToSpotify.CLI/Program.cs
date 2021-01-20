@@ -73,10 +73,47 @@ namespace WhatsAppToSpotify.CLI
                 await serviceProvider.GetRequiredService<WhatsAppExportToPlaylistHandler>().HandleAsync(command);
             });
 
+            var analyzeCommand = new Command("analyze")
+            {
+                new Option(
+                   new string [] { "--export-file", "-e" },
+                   "The WhatsApp export file")
+                {
+                   Argument = new Argument<FileInfo>("exportFile"),
+                   Required = true
+                },
+                                new Option(
+                   new string [] { "--output-file", "-o" },
+                   "The output CSV file")
+                {
+                   Argument = new Argument<FileInfo>("outputFile"),
+                   Required = true
+                },
+                new Option(
+                   new string [] { "--start-from", "-s" },
+                   "The time to start processing messages from (in ISO 8601 format)")
+                {
+                   Argument = new Argument<DateTime>("startFrom", () => DateTime.MinValue)
+                }
+            };
+
+            analyzeCommand.Handler = CommandHandler.Create<FileInfo, FileInfo, DateTime>(async (exportFile, outputFile, startFrom) =>
+            {
+                var command = new AnalyzeCommand
+                {
+                    ExportLines = File.ReadAllLines(exportFile.FullName),
+                    OutputFile = outputFile,
+                    StartFrom = startFrom
+                };
+
+                await serviceProvider.GetRequiredService<AnalyzeHandler>().HandleAsync(command);
+            });
+
             var rootCommand = new RootCommand("wats")
             {
                 authCommand,
                 exportToPlaylistCommand,
+                analyzeCommand,
             };
 
             rootCommand.Description = "WhatsApp to Spotify. Ensure you have set spotify:clientId and spotify:clientSecret, either through environment variables or in settings.json file.";
@@ -91,6 +128,7 @@ namespace WhatsAppToSpotify.CLI
                     .AddSingleton<Spotify>()
                     .AddTransient<SpotifyAuthenticateHandler>()
                     .AddTransient<WhatsAppExportToPlaylistHandler>()
+                    .AddTransient<AnalyzeHandler>()
                     .AddOptions()
                     .Configure<SpotifyOptions>(config.GetSection("spotify"));
         }
